@@ -14,26 +14,31 @@
 		$list.each( function () {
 			var $ul = $( this );
 
-			/* Already converted — rebuild cleanly */
+			/* Tear down any previous accordion — move li's back, then remove wrappers */
 			$ul.find( '.wclsr-carrier-group' ).each( function () {
-				$( this ).find( 'li' ).unwrap();
+				var $group = $( this );
+				$group.find( '.wclsr-carrier-options li' ).each( function () {
+					$ul.append( $( this ) );
+				} );
+				$group.remove();
 			} );
 
 			CARRIERS.forEach( function ( carrier ) {
-				/* Collect all <li> items that belong to this carrier */
+				/* Match by the radio VALUE, which WooCommerce sets to the rate ID
+				   e.g. "wclsr_canada_post_DOM.EP" — not the element id which is
+				   prefixed "shipping_method_0_wclsr_canada_post_..." */
 				var $items = $ul.find( 'li' ).filter( function () {
-					var inputId = $( this ).find( 'input[type="radio"]' ).attr( 'id' ) || '';
-					return inputId.indexOf( carrier.key ) === 0;
+					var val = $( this ).find( 'input[type="radio"]' ).val() || '';
+					return val.indexOf( carrier.key ) === 0;
 				} );
 
 				if ( ! $items.length ) return;
 
-				var count = $items.length;
+				var count       = $items.length;
 				var hasSelected = $items.filter( function () {
 					return $( this ).find( 'input[type="radio"]' ).is( ':checked' );
 				} ).length > 0;
 
-				/* Build the group wrapper */
 				var $group = $( '<li class="wclsr-carrier-group"></li>' );
 				if ( hasSelected ) $group.addClass( 'is-open has-selected' );
 
@@ -47,7 +52,7 @@
 
 				var $optionsWrap = $( '<ul class="wclsr-carrier-options"></ul>' );
 				$items.each( function () {
-					$( this ).appendTo( $optionsWrap );
+					$optionsWrap.append( $( this ) );
 				} );
 
 				$group.append( $toggle ).append( $optionsWrap );
@@ -58,19 +63,22 @@
 
 	/* Toggle open/close */
 	$( document ).on( 'click', '.wclsr-carrier-toggle', function () {
-		var $group = $( this ).closest( '.wclsr-carrier-group' );
-		$group.toggleClass( 'is-open' );
+		$( this ).closest( '.wclsr-carrier-group' ).toggleClass( 'is-open' );
 	} );
 
-	/* Mark carrier as having a selection when a rate is chosen */
-	$( document ).on( 'change', 'ul#shipping_method input[type="radio"], ul.woocommerce-shipping-rates input[type="radio"]', function () {
-		var $radio = $( this );
+	/* Mark carrier as selected when a rate is chosen */
+	$( document ).on( 'change', 'input[type="radio"]', function () {
+		var val = $( this ).val() || '';
 		$( '.wclsr-carrier-group' ).removeClass( 'has-selected' );
-		$radio.closest( '.wclsr-carrier-group' ).addClass( 'has-selected' );
+		CARRIERS.forEach( function ( carrier ) {
+			if ( val.indexOf( carrier.key ) === 0 ) {
+				$( this ).closest( '.wclsr-carrier-group' ).addClass( 'has-selected' );
+			}
+		}.bind( this ) );
 	} );
 
 	/* Run on page load and after WooCommerce refreshes shipping via AJAX */
 	$( document ).ready( buildAccordions );
-	$( document.body ).on( 'updated_checkout updated_shipping_method', buildAccordions );
+	$( document.body ).on( 'updated_checkout updated_shipping_method wc_update_cart', buildAccordions );
 
 } )( jQuery );
