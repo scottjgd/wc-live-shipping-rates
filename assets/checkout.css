@@ -1,5 +1,9 @@
 /* WC Live Shipping Rates — Checkout Carrier Accordion */
 
+/* =========================================================================
+   Classic checkout (WooCommerce shortcode)
+   ========================================================================= */
+
 .wclsr-carrier-group {
 	border: 1px solid #e0e0e0;
 	border-radius: 6px;
@@ -27,14 +31,6 @@
 
 .wclsr-carrier-toggle:hover {
 	background: #eef0f1;
-}
-
-.wclsr-carrier-logo {
-	width: 28px;
-	height: 28px;
-	border-radius: 4px;
-	object-fit: contain;
-	flex-shrink: 0;
 }
 
 .wclsr-carrier-name {
@@ -101,11 +97,66 @@
 	margin: 0;
 }
 
-/* Pre-selected state */
 .wclsr-carrier-group.has-selected .wclsr-carrier-toggle {
 	border-left: 3px solid #2271b1;
 }
 
 .wclsr-carrier-group.has-selected .wclsr-carrier-badge {
 	background: #1a5e99;
+}
+
+/* =========================================================================
+   Block checkout (WooCommerce Checkout Block — React-based)
+   ========================================================================= */
+
+.wclsr-block-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 12px 16px;
+	background: #f6f7f7;
+	border-left: 4px solid #2271b1;
+	border-radius: 4px 4px 0 0;
+	cursor: pointer;
+	margin-top: 8px;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.wclsr-block-header:first-child {
+	margin-top: 0;
+}
+
+.wclsr-block-carrier-name {
+	flex: 1;
+	font-weight: 600;
+	font-size: 14px;
+	color: #1d2327;
+}
+
+.wclsr-block-badge {
+	background: #2271b1;
+	color: #fff;
+	font-size: 11px;
+	font-weight: 700;
+	padding: 2px 9px;
+	border-radius: 10px;
+	line-height: 1.6;
+	white-space: nowrap;
+}
+
+.wclsr-block-arrow {
+	font-size: 20px;
+	color: #2271b1;
+	line-height: 1;
+	transition: transform 0.2s ease;
+	display: inline-block;
+}
+
+.wclsr-block-header.is-open .wclsr-block-arrow {
+	transform: rotate(90deg);
+}
+
+.wc-block-components-radio-control__option.wclsr-rate-hidden {
+	display: none !important;
 }
