@@ -3,7 +3,7 @@
  * Plugin Name: WC Live Shipping Rates
  * Plugin URI:  https://github.com/your-repo/wc-live-shipping-rates
  * Description: Fetch live shipping rates from Canada Post, UPS, and Purolator at WooCommerce checkout.
- * Version:     1.1.3
+ * Version:     1.1.4
  * Author:      Your Name
  * License:     GPL-2.0+
  * Text Domain: wc-live-shipping-rates
@@ -13,7 +13,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'WCLSR_VERSION',     '1.1.3' );
+define( 'WCLSR_VERSION',     '1.1.4' );
 define( 'WCLSR_PATH',        plugin_dir_path( __FILE__ ) );
 define( 'WCLSR_URL',         plugin_dir_url( __FILE__ ) );
 
@@ -87,6 +87,51 @@ add_action( 'wp_enqueue_scripts', function () {
                 WCLSR_VERSION,
                 true
         );
+} );
+
+/**
+ * Admin notice when a carrier is enabled but missing API credentials.
+ */
+add_action( 'admin_notices', function () {
+        $screen = get_current_screen();
+        if ( ! $screen || $screen->id !== 'woocommerce_page_wc-settings' ) return;
+        if ( empty( $_GET['tab'] ) || $_GET['tab'] !== 'shipping' ) return;
+        if ( ! class_exists( 'WC_Shipping_Zones' ) ) return;
+
+        $required = [
+                'wclsr_canada_post' => [ 'label' => 'Canada Post', 'fields' => [ 'api_username', 'api_password', 'customer_number', 'origin_postal_code' ] ],
+                'wclsr_ups'         => [ 'label' => 'UPS',         'fields' => [ 'client_id', 'client_secret', 'account_number' ] ],
+                'wclsr_purolator'   => [ 'label' => 'Purolator',   'fields' => [ 'api_key', 'api_password', 'account_number' ] ],
+        ];
+
+        $missing = [];
+
+        $zone_data = WC_Shipping_Zones::get_zones();
+        $zone_data[] = [ 'zone_id' => 0 ];
+
+        foreach ( $zone_data as $data ) {
+                $zone    = WC_Shipping_Zones::get_zone( $data['zone_id'] ?? 0 );
+                $methods = $zone->get_shipping_methods( true );
+                foreach ( $methods as $method ) {
+                        if ( ! isset( $required[ $method->id ] ) ) continue;
+                        foreach ( $required[ $method->id ]['fields'] as $field ) {
+                                if ( empty( $method->get_option( $field ) ) ) {
+                                        $missing[ $required[ $method->id ]['label'] ] = true;
+                                        break;
+                                }
+                        }
+                }
+        }
+
+        if ( empty( $missing ) ) return;
+
+        echo '<div class="notice notice-warning"><p>';
+        printf(
+                '<strong>WC Live Shipping Rates:</strong> %s %s missing API credentials and will not show rates at checkout. Click each carrier name below to open its settings and enter its API keys.',
+                esc_html( implode( ', ', array_keys( $missing ) ) ),
+                count( $missing ) === 1 ? 'is' : 'are'
+        );
+        echo '</p></div>';
 } );
 
 /**
