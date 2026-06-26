@@ -1,0 +1,89 @@
+/* WC Live Shipping Rates — Admin Accordion */
+
+.wclsr-section-header td {
+	padding: 0 !important;
+	border-bottom: 1px solid #e0e0e0;
+}
+
+.wclsr-toggle {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 12px 16px;
+	background: #f6f7f7;
+	border: none;
+	border-left: 4px solid #2271b1;
+	cursor: pointer;
+	text-align: left;
+	font-size: 13px;
+	color: #1d2327;
+	transition: background 0.15s;
+}
+
+.wclsr-toggle:hover {
+	background: #eef0f1;
+}
+
+.wclsr-toggle:focus {
+	box-shadow: none;
+	outline: 2px solid #2271b1;
+	outline-offset: -2px;
+}
+
+.wclsr-toggle strong {
+	flex: 1;
+	font-size: 13px;
+}
+
+.wclsr-toggle-icon {
+	color: #2271b1;
+	font-size: 16px;
+	transition: transform 0.2s ease;
+	line-height: 1;
+}
+
+.wclsr-toggle.is-open .wclsr-toggle-icon {
+	transform: rotate(90deg);
+}
+
+.wclsr-count {
+	background: #2271b1;
+	color: #fff;
+	font-size: 11px;
+	font-weight: 600;
+	padding: 2px 8px;
+	border-radius: 10px;
+	min-width: 28px;
+	text-align: center;
+	line-height: 1.6;
+}
+
+.wclsr-section-body {
+	display: none;
+}
+
+.wclsr-section-body.is-open {
+	display: table-row;
+}
+
+.wclsr-section-body td {
+	padding: 0 !important;
+	background: #fff;
+}
+
+.wclsr-inner-table {
+	width: 100%;
+	margin: 0;
+	border-collapse: collapse;
+}
+
+.wclsr-inner-table th,
+.wclsr-inner-table td {
+	padding: 10px 24px !important;
+}
+
+.wclsr-inner-table th {
+	width: 200px;
+	padding-left: 36px !important;
+}
