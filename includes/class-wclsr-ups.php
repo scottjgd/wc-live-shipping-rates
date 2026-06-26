@@ -149,7 +149,7 @@ class WCLSR_UPS extends WCLSR_Base {
                 $body = wp_remote_retrieve_body( $response );
 
                 if ( $code !== 200 ) {
-                        $this->log( "UPS API returned HTTP $code: $body" );
+                        $this->log( "UPS API returned HTTP $code: " . substr( $body, 0, 600 ) );
                         return;
                 }
 
@@ -321,8 +321,8 @@ class WCLSR_UPS extends WCLSR_Base {
         }
 
         private function log( $message ) {
-                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                        error_log( '[WCLSR] ' . $message );
-                }
+                $logger  = wc_get_logger();
+                $context = [ 'source' => 'wclsr-ups' ];
+                $logger->error( $message, $context );
         }
 }
