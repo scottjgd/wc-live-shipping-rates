@@ -3,7 +3,7 @@
  * Plugin Name: WC Live Shipping Rates
  * Plugin URI:  https://github.com/your-repo/wc-live-shipping-rates
  * Description: Fetch live shipping rates from Canada Post, UPS, and Purolator at WooCommerce checkout.
- * Version:     1.1.1
+ * Version:     1.1.2
  * Author:      Your Name
  * License:     GPL-2.0+
  * Text Domain: wc-live-shipping-rates
@@ -13,7 +13,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'WCLSR_VERSION',     '1.1.1' );
+define( 'WCLSR_VERSION',     '1.1.2' );
 define( 'WCLSR_PATH',        plugin_dir_path( __FILE__ ) );
 define( 'WCLSR_URL',         plugin_dir_url( __FILE__ ) );
 
