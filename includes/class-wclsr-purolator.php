@@ -2,24 +2,24 @@
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Purolator Live Rates — REST API v1
+ * Purolator Live Rates — ship.purolator.com REST API
  *
- * Auth (OAuth2 client_credentials):
- *   Sandbox:    POST https://devapi.purolator.com/oauth/token
- *   Production: POST https://api.purolator.com/oauth/token
- *   Body: application/x-www-form-urlencoded
- *         grant_type=client_credentials&client_id=KEY&client_secret=PASSWORD
- *   Response: { access_token, token_type, expires_in }
+ * Auth (Okta OAuth2 client_credentials):
+ *   POST https://auth.purolator.com/oauth2/aus11x6a58hwZ5OOP5d7/v1/token
+ *   Content-Type: application/x-www-form-urlencoded
+ *   Body: grant_type=client_credentials&client_id=<api_key>&client_secret=<api_password>
+ *   → { access_token, token_type, expires_in }
  *
  * Estimate:
- *   Sandbox:    POST https://devapi.purolator.com/v1/estimates
- *   Production: POST https://api.purolator.com/v1/estimates
+ *   POST https://api.purolator.com/v1/estimates
  *   Authorization: Bearer <access_token>
+ *   X-Api-Key: <api_key>
+ *   Content-Type: application/json
  */
 class WCLSR_Purolator extends WCLSR_Base {
 
-	const API_SANDBOX = 'https://devapi.purolator.com';
-	const API_PROD    = 'https://api.purolator.com';
+	const TOKEN_URL    = 'https://auth.purolator.com/oauth2/aus11x6a58hwZ5OOP5d7/v1/token';
+	const ESTIMATE_URL = 'https://api.purolator.com/v1/estimates';
 
 	public function __construct( $instance_id = 0 ) {
 		$this->id                 = 'wclsr_purolator';
@@ -59,21 +59,21 @@ class WCLSR_Purolator extends WCLSR_Base {
 			'api_key' => [
 				'title'       => __( 'API Key (Client ID)', 'wc-live-shipping-rates' ),
 				'type'        => 'text',
-				'description' => __( 'Your API Key from ship.purolator.com → Developer Portal → API Credentials.', 'wc-live-shipping-rates' ),
+				'description' => __( 'Your API Key from ship.purolator.com → Developer Portal → Manage Keys.', 'wc-live-shipping-rates' ),
 				'default'     => '',
 				'desc_tip'    => true,
 			],
 			'api_password' => [
 				'title'       => __( 'API Password (Client Secret)', 'wc-live-shipping-rates' ),
 				'type'        => 'password',
-				'description' => __( 'Your API Password from ship.purolator.com → Developer Portal → API Credentials.', 'wc-live-shipping-rates' ),
+				'description' => __( 'Your API Password from ship.purolator.com → Developer Portal → Manage Keys.', 'wc-live-shipping-rates' ),
 				'default'     => '',
 				'desc_tip'    => true,
 			],
 			'account_number' => [
 				'title'       => __( 'Account Number', 'wc-live-shipping-rates' ),
 				'type'        => 'text',
-				'description' => __( 'Your Purolator account number (will be zero-padded to 7 digits).', 'wc-live-shipping-rates' ),
+				'description' => __( 'Your Purolator account number (zero-padded to 7 digits automatically).', 'wc-live-shipping-rates' ),
 				'default'     => '',
 				'desc_tip'    => true,
 			],
@@ -83,12 +83,6 @@ class WCLSR_Purolator extends WCLSR_Base {
 				'description' => __( 'Postal code your shipments originate from (e.g. K1A0B1).', 'wc-live-shipping-rates' ),
 				'default'     => '',
 				'desc_tip'    => true,
-			],
-			'sandbox' => [
-				'title'   => __( 'Development / Test Mode', 'wc-live-shipping-rates' ),
-				'type'    => 'checkbox',
-				'label'   => __( 'Use Purolator sandbox (devapi.purolator.com) — for Development credentials', 'wc-live-shipping-rates' ),
-				'default' => 'yes',
 			],
 			'markup' => [
 				'title'             => __( 'Rate Markup (%)', 'wc-live-shipping-rates' ),
@@ -106,7 +100,6 @@ class WCLSR_Purolator extends WCLSR_Base {
 		$api_password   = trim( $this->get_option( 'api_password' ) );
 		$account_number = trim( $this->get_option( 'account_number' ) );
 		$origin_postal  = preg_replace( '/\s+/', '', strtoupper( $this->get_option( 'origin_postal_code' ) ) );
-		$sandbox        = $this->get_option( 'sandbox' ) === 'yes';
 		$markup_pct     = (float) $this->get_option( 'markup', 0 );
 
 		if ( empty( $api_key ) || empty( $api_password ) || empty( $account_number ) || empty( $origin_postal ) ) {
@@ -123,41 +116,38 @@ class WCLSR_Purolator extends WCLSR_Base {
 		// Purolator requires account number zero-padded to 7 digits
 		$account_number = str_pad( $account_number, 7, '0', STR_PAD_LEFT );
 
-		$base_url  = $sandbox ? self::API_SANDBOX : self::API_PROD;
 		$weight_kg = $this->get_package_weight_kg( $package );
 		$dims      = $this->get_package_dims_cm( $package );
 
-		// Step 1 — OAuth2 Bearer token (cached in transients ~55 min)
-		$token = $this->get_bearer_token( $api_key, $api_password, $base_url );
+		// Step 1 — Okta OAuth2 token (cached in transients)
+		$token = $this->get_bearer_token( $api_key, $api_password );
 		if ( ! $token ) {
 			return;
 		}
 
 		// Step 2 — Estimate API
 		$this->send_estimate_request(
-			$token, $base_url, $account_number,
+			$token, $api_key, $account_number,
 			$origin_postal, $dest_postal,
 			$weight_kg, $dims, $markup_pct
 		);
 	}
 
 	// -------------------------------------------------------------------------
-	// OAuth2 token fetch & cache
+	// Okta OAuth2 client_credentials token
 	// -------------------------------------------------------------------------
 
-	private function get_bearer_token( $api_key, $api_password, $base_url ) {
-		$cache_key = 'wclsr_purolator_tok_' . md5( $api_key . $base_url );
+	private function get_bearer_token( $api_key, $api_password ) {
+		$cache_key = 'wclsr_purolator_tok_' . md5( $api_key );
 		$cached    = get_transient( $cache_key );
 		if ( $cached ) {
 			$this->log( 'Purolator: using cached auth token.' );
 			return $cached;
 		}
 
-		$token_url = $base_url . '/oauth/token';
+		$this->log( 'Purolator: requesting auth token from ' . self::TOKEN_URL );
 
-		$this->log( 'Purolator: requesting auth token from ' . $token_url );
-
-		$response = wp_remote_post( $token_url, [
+		$response = wp_remote_post( self::TOKEN_URL, [
 			'headers' => [
 				'Content-Type' => 'application/x-www-form-urlencoded',
 				'Accept'       => 'application/json',
@@ -178,8 +168,9 @@ class WCLSR_Purolator extends WCLSR_Base {
 		$code = wp_remote_retrieve_response_code( $response );
 		$body = wp_remote_retrieve_body( $response );
 
+		$this->log( "Purolator: auth response HTTP $code — " . substr( $body, 0, 800 ) );
+
 		if ( $code !== 200 ) {
-			$this->log( "Purolator: auth returned HTTP $code — " . substr( $body, 0, 600 ) );
 			return null;
 		}
 
@@ -187,14 +178,14 @@ class WCLSR_Purolator extends WCLSR_Base {
 		$token = $data['access_token'] ?? '';
 
 		if ( empty( $token ) ) {
-			$this->log( 'Purolator: auth OK but no access_token in response — ' . substr( $body, 0, 400 ) );
+			$this->log( 'Purolator: auth OK but no access_token in response.' );
 			return null;
 		}
 
 		$expires_in = (int) ( $data['expires_in'] ?? 3600 );
 		set_transient( $cache_key, $token, max( 60, $expires_in - 300 ) );
 
-		$this->log( 'Purolator: auth token obtained (expires in ' . $expires_in . 's).' );
+		$this->log( 'Purolator: auth token obtained (expires_in=' . $expires_in . 's).' );
 
 		return $token;
 	}
@@ -203,49 +194,76 @@ class WCLSR_Purolator extends WCLSR_Base {
 	// Estimate request
 	// -------------------------------------------------------------------------
 
-	private function send_estimate_request( $token, $base_url, $account_number, $origin_postal, $dest_postal, $weight_kg, $dims, $markup_pct ) {
-		$estimate_url = $base_url . '/v1/estimates';
-		$ship_date    = $this->get_next_business_day();
+	private function send_estimate_request( $token, $api_key, $account_number, $origin_postal, $dest_postal, $weight_kg, $dims, $markup_pct ) {
+		$ship_date = $this->get_next_business_day();
 
+		// Build request payload — Purolator's lineOfBusiness must be "Courier" or "Freight"
 		$payload = [
-			'shipper' => [
-				'postalCode'   => $origin_postal,
-				'countryCode'  => 'CA',
+			'shipmentDate'          => $ship_date,
+			'lineOfBusiness'        => 'Courier',
+			'senderInformation'     => [
+				'address' => [
+					'postalCode' => $origin_postal,
+					'country'    => 'CA',
+				],
 			],
-			'receiver' => [
-				'postalCode'  => $dest_postal,
-				'countryCode' => 'CA',
+			'receiverInformation'   => [
+				'address' => [
+					'postalCode' => $dest_postal,
+					'country'    => 'CA',
+				],
 			],
-			'packages' => [
-				[
-					'weight'    => [
-						'value'      => $weight_kg,
-						'weightUnit' => 'kg',
-					],
-					'dimension' => [
-						'length'        => $dims['length'],
-						'width'         => $dims['width'],
-						'height'        => $dims['height'],
-						'dimensionUnit' => 'cm',
+			'packageInformation'    => [
+				'totalWeight' => [
+					'value'      => $weight_kg,
+					'weightUnit' => 'kg',
+				],
+				'totalPieces' => 1,
+				'piecesInformation' => [
+					[
+						'weight' => [
+							'value'      => $weight_kg,
+							'weightUnit' => 'kg',
+						],
+						'length' => [
+							'value'         => $dims['length'],
+							'dimensionUnit' => 'cm',
+						],
+						'width'  => [
+							'value'         => $dims['width'],
+							'dimensionUnit' => 'cm',
+						],
+						'height' => [
+							'value'         => $dims['height'],
+							'dimensionUnit' => 'cm',
+						],
 					],
 				],
 			],
-			'shipmentDate'  => $ship_date,
-			'accountNumber' => $account_number,
+			'paymentInformation'    => [
+				'paymentType'              => 'Sender',
+				'registeredAccountNumber'  => $account_number,
+			],
+			'pickupInformation'     => [
+				'pickupType' => 'DropOff',
+			],
+			'showAlternativeServicesIndicator' => true,
 		];
 
 		$this->log( sprintf(
-			'Purolator: estimate → %s | origin=%s dest=%s weight=%.3fkg dims=%sx%sx%scm date=%s acct=%s',
-			$estimate_url, $origin_postal, $dest_postal,
+			'Purolator: estimate → %s | origin=%s dest=%s weight=%.3fkg dims=%sx%sx%scm acct=%s date=%s',
+			self::ESTIMATE_URL, $origin_postal, $dest_postal,
 			$weight_kg, $dims['length'], $dims['width'], $dims['height'],
-			$ship_date, $account_number
+			$account_number, $ship_date
 		) );
+		$this->log( 'Purolator: payload = ' . wp_json_encode( $payload ) );
 
-		$response = wp_remote_post( $estimate_url, [
+		$response = wp_remote_post( self::ESTIMATE_URL, [
 			'headers' => [
 				'Content-Type'  => 'application/json',
 				'Accept'        => 'application/json',
 				'Authorization' => 'Bearer ' . $token,
+				'X-Api-Key'     => $api_key,
 			],
 			'body'    => wp_json_encode( $payload ),
 			'timeout' => 20,
@@ -259,14 +277,18 @@ class WCLSR_Purolator extends WCLSR_Base {
 		$code = wp_remote_retrieve_response_code( $response );
 		$body = wp_remote_retrieve_body( $response );
 
+		$this->log( "Purolator: estimate response HTTP $code — " . substr( $body, 0, 1200 ) );
+
 		if ( $code !== 200 ) {
-			$this->log( "Purolator: estimate returned HTTP $code — " . substr( $body, 0, 800 ) );
 			return;
 		}
 
-		$this->log( 'Purolator: estimate response — ' . substr( $body, 0, 1000 ) );
 		$this->parse_rates( $body, $markup_pct );
 	}
+
+	// -------------------------------------------------------------------------
+	// Rate parsing — logs the full response so we can adapt if schema differs
+	// -------------------------------------------------------------------------
 
 	private function parse_rates( $body, $markup_pct ) {
 		$data = json_decode( $body, true );
@@ -276,29 +298,31 @@ class WCLSR_Purolator extends WCLSR_Base {
 			return;
 		}
 
-		// Try several key names the response could use
-		$rates = $data['estimates']
+		// Purolator REST may wrap estimates under different keys
+		$rates = $data['shipmentEstimates']
+			?? $data['estimates']
 			?? $data['rates']
-			?? $data['shipmentEstimates']
 			?? $data['services']
 			?? [];
 
-		if ( empty( $rates ) && isset( $data['serviceCode'] ) ) {
+		if ( empty( $rates ) && isset( $data['serviceID'] ) ) {
 			$rates = [ $data ];
 		}
 
 		if ( empty( $rates ) ) {
-			$this->log( 'Purolator: no rates in response. Top-level keys: ' . implode( ', ', array_keys( $data ) ) );
+			$this->log( 'Purolator: no rate array found. Top-level keys: ' . implode( ', ', array_keys( $data ) ) );
 			return;
 		}
 
 		$added = 0;
 		foreach ( $rates as $rate ) {
-			$service_code = $rate['serviceCode'] ?? $rate['service'] ?? $rate['code'] ?? '';
-			$service_name = $rate['serviceName'] ?? $rate['serviceDescription'] ?? $rate['name'] ?? $service_code;
+			$service_id   = $rate['serviceID'] ?? $rate['serviceCode'] ?? $rate['service'] ?? '';
+			$service_name = $rate['serviceName'] ?? $rate['serviceDescription'] ?? $rate['name'] ?? $service_id;
 
-			// totalPrice may be nested { amount, currency } or a plain float
-			if ( isset( $rate['totalPrice']['amount'] ) ) {
+			// totalPrice may be { value, currency } or a plain float
+			if ( isset( $rate['totalPrice']['value'] ) ) {
+				$base_price = (float) $rate['totalPrice']['value'];
+			} elseif ( isset( $rate['totalPrice']['amount'] ) ) {
 				$base_price = (float) $rate['totalPrice']['amount'];
 			} else {
 				$base_price = (float) ( $rate['totalPrice'] ?? $rate['total'] ?? $rate['amount'] ?? $rate['price'] ?? 0 );
@@ -311,8 +335,8 @@ class WCLSR_Purolator extends WCLSR_Base {
 			$final = $base_price * ( 1 + $markup_pct / 100 );
 
 			$this->add_rate( [
-				'id'    => $this->id . '_' . sanitize_key( $service_code ),
-				'label' => 'Purolator: ' . ( $service_name ?: $service_code ),
+				'id'    => $this->id . '_' . sanitize_key( $service_id ),
+				'label' => 'Purolator: ' . ( $service_name ?: $service_id ),
 				'cost'  => round( $final, 2 ),
 			] );
 			$added++;
