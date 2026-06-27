@@ -78,8 +78,8 @@ class WCLSR_Purolator extends WCLSR_Base {
                         'oauth_scope' => [
                                 'title'       => __( 'OAuth Scope', 'wc-live-shipping-rates' ),
                                 'type'        => 'text',
-                                'description' => __( 'OAuth2 scope required by Purolator\'s token server. Check your Purolator developer portal documentation or contact Purolator API support for the correct value. Try "openid" first; the WC log will show the exact error if it is wrong.', 'wc-live-shipping-rates' ),
-                                'default'     => 'openid',
+                                'description' => __( 'OAuth2 scope for the Purolator token request. To find the correct value: log in to ship.purolator.com → Developer Portal → API Reference, press F12 → Network tab, then trigger a "Try it" API call — look for a POST to auth.purolator.com/.../token and copy the "scope" parameter. You can also email developer-support@purolator.com. The WC log shows the exact error if the value is wrong.', 'wc-live-shipping-rates' ),
+                                'default'     => 'shipping',
                                 'desc_tip'    => true,
                         ],
                         'api_key' => [
