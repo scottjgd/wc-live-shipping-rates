@@ -115,10 +115,16 @@ class WCLSR_Purolator extends WCLSR_Base {
                         $weight_kg, $dims
                 );
 
+                $this->log( sprintf(
+                        'Purolator: calling %s | origin=%s dest=%s weight=%.3fkg',
+                        $endpoint, $origin_postal, $dest_postal, $weight_kg
+                ) );
+
                 $response = wp_remote_post( $endpoint, [
                         'headers' => [
-                                'Content-Type' => 'text/xml; charset=utf-8',
-                                'SOAPAction'   => 'http://purolator.com/pws/service/v2/GetFullEstimate',
+                                'Content-Type'  => 'text/xml; charset=utf-8',
+                                'SOAPAction'    => 'http://purolator.com/pws/service/v2/GetFullEstimate',
+                                'Authorization' => 'Basic ' . base64_encode( $api_key . ':' . $api_password ),
                         ],
                         'body'    => $soap_xml,
                         'timeout' => 20,
