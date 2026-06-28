@@ -166,7 +166,7 @@ class WCLSR_Purolator extends WCLSR_Base {
                 $markup_pct      = (float) $this->get_option( 'markup', 0 );
 
                 if ( empty( $api_key ) || empty( $api_password ) || empty( $account_number ) || empty( $origin_postal ) ) {
-                        $this->log( 'Purolator: missing credentials — fill in API Key, API Password, Account Number, and Origin Postal Code in the plugin settings.' );
+                        $this->log( 'Purolator: missing credentials — fill in API Key, API Password, Account Number, and Origin Postal Code in the plugin settings.', 'warning' );
                         return;
                 }
 
@@ -176,7 +176,7 @@ class WCLSR_Purolator extends WCLSR_Base {
                 $dest_country  = strtoupper( trim( $package['destination']['country'] ?? 'CA' ) );
 
                 if ( empty( $dest_postal ) ) {
-                        $this->log( 'Purolator: no destination postal code — cannot calculate rate.' );
+                        $this->log( 'Purolator: no destination postal code — cannot calculate rate.', 'warning' );
                         return;
                 }
 
@@ -200,7 +200,7 @@ class WCLSR_Purolator extends WCLSR_Base {
                         $dest_postal, $dest_city, $dest_province,
                         $weight_kg, $dims['length'], $dims['width'], $dims['height'],
                         $account_number, $ship_date
-                ) );
+                ), 'debug' );
 
                 $soap_xml = $this->build_soap_xml(
                         $origin_postal, $origin_city, $origin_province,
@@ -219,14 +219,14 @@ class WCLSR_Purolator extends WCLSR_Base {
                 ] );
 
                 if ( is_wp_error( $response ) ) {
-                        $this->log( 'Purolator SOAP: HTTP error — ' . $response->get_error_message() );
+                        $this->log( 'Purolator SOAP: HTTP error — ' . $response->get_error_message(), 'error' );
                         return;
                 }
 
                 $code = wp_remote_retrieve_response_code( $response );
                 $body = wp_remote_retrieve_body( $response );
 
-                $this->log( "Purolator SOAP: HTTP $code — " . substr( $body, 0, 2000 ) );
+                $this->log( "Purolator SOAP: HTTP $code — " . substr( $body, 0, 2000 ), 'debug' );
 
                 if ( $code !== 200 ) {
                         return;
@@ -366,7 +366,7 @@ XML;
                         $msgs = array_map( static function ( $e ) {
                                 return trim( $e->message ) . ' (line ' . $e->line . ')';
                         }, $lib_errors );
-                        $this->log( 'Purolator SOAP: DOMDocument parse failed — ' . implode( ' | ', $msgs ) );
+                        $this->log( 'Purolator SOAP: DOMDocument parse failed — ' . implode( ' | ', $msgs ), 'error' );
                         return;
                 }
 
@@ -374,7 +374,7 @@ XML;
                         $msgs = array_map( static function ( $e ) {
                                 return trim( $e->message );
                         }, $lib_errors );
-                        $this->log( 'Purolator SOAP: libxml warnings — ' . implode( ' | ', $msgs ) );
+                        $this->log( 'Purolator SOAP: libxml warnings — ' . implode( ' | ', $msgs ), 'warning' );
                 }
 
                 $xpath = new DOMXPath( $doc );
@@ -389,7 +389,7 @@ XML;
                         $fc = $xpath->query( 'faultcode', $f );
                         $msg = ( $fs && $fs->length ) ? $fs->item(0)->nodeValue
                              : ( ( $fc && $fc->length ) ? $fc->item(0)->nodeValue : 'unknown' );
-                        $this->log( 'Purolator SOAP: SOAP fault — ' . $msg );
+                        $this->log( 'Purolator SOAP: SOAP fault — ' . $msg, 'error' );
                         return;
                 }
 
@@ -402,7 +402,8 @@ XML;
                                 $this->log( 'Purolator SOAP: API error — Code='
                                         . ( ( $code && $code->length ) ? $code->item(0)->nodeValue : '?' )
                                         . ' | '
-                                        . ( ( $desc && $desc->length ) ? $desc->item(0)->nodeValue : '?' )
+                                        . ( ( $desc && $desc->length ) ? $desc->item(0)->nodeValue : '?' ),
+                                        'error'
                                 );
                         }
                 }
@@ -417,7 +418,7 @@ XML;
 
                 if ( ! $estimates || $estimates->length === 0 ) {
                         $this->log( 'Purolator SOAP: no ShipmentEstimate elements found. Full response (first 3000 chars): '
-                                . substr( $xml_body, 0, 3000 ) );
+                                . substr( $xml_body, 0, 3000 ), 'error' );
                         return;
                 }
 
@@ -452,13 +453,13 @@ XML;
 
                         $added++;
                         $this->log( sprintf( 'Purolator SOAP: rate added — %s $%.2f (delivery: %s transit: %d days)',
-                                $service_id, $cost, $delivery ?: 'n/a', $transit ) );
+                                $service_id, $cost, $delivery ?: 'n/a', $transit ), 'debug' );
                 }
 
                 if ( $added === 0 ) {
-                        $this->log( 'Purolator SOAP: response parsed but no valid rates found.' );
+                        $this->log( 'Purolator SOAP: response parsed but no valid rates found.', 'error' );
                 } else {
-                        $this->log( "Purolator SOAP: $added rate(s) added." );
+                        $this->log( "Purolator SOAP: $added rate(s) added.", 'debug' );
                 }
         }
 
@@ -541,9 +542,9 @@ XML;
                 ];
         }
 
-        private function log( $message ) {
+        private function log( $message, $level = 'debug' ) {
                 $logger  = wc_get_logger();
                 $context = [ 'source' => 'wclsr-purolator' ];
-                $logger->error( $message, $context );
+                $logger->$level( $message, $context );
         }
 }
