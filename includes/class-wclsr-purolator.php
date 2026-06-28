@@ -26,6 +26,22 @@ class WCLSR_Purolator extends WCLSR_Base {
         const TOKEN_URL    = 'https://auth.purolator.com/oauth2/aus11x6a58hwZ5OOP5d7/v1/token';
         const ESTIMATE_URL = 'https://api.purolator.com/v1/estimates';
 
+        // Ordered list of scope candidates tried automatically when configured scope fails.
+        // The first one that returns a valid token wins and is cached.
+        const SCOPE_CANDIDATES = [
+                'shipping',
+                'courier',
+                'api',
+                'rates',
+                'estimate',
+                'estimates',
+                'purolator',
+                'default',
+                'openapi',
+                'write',
+                'read',
+        ];
+
         public function __construct( $instance_id = 0 ) {
                 $this->id                 = 'wclsr_purolator';
                 $this->instance_id        = absint( $instance_id );
@@ -76,10 +92,10 @@ class WCLSR_Purolator extends WCLSR_Base {
                                 'desc_tip'    => true,
                         ],
                         'oauth_scope' => [
-                                'title'       => __( 'OAuth Scope', 'wc-live-shipping-rates' ),
+                                'title'       => __( 'OAuth Scope (optional override)', 'wc-live-shipping-rates' ),
                                 'type'        => 'text',
-                                'description' => __( 'OAuth2 scope for the Purolator token request. To find the correct value: log in to ship.purolator.com → Developer Portal → API Reference, press F12 → Network tab, then trigger a "Try it" API call — look for a POST to auth.purolator.com/.../token and copy the "scope" parameter. You can also email developer-support@purolator.com. The WC log shows the exact error if the value is wrong.', 'wc-live-shipping-rates' ),
-                                'default'     => 'shipping',
+                                'description' => __( 'Leave blank to use automatic scope discovery — the plugin will try common scope values and remember the one that works. Only fill this in if you know your exact scope from Purolator support (developer-support@purolator.com). The WC log always shows each attempt so you can see exactly which scope succeeded or failed.', 'wc-live-shipping-rates' ),
+                                'default'     => '',
                                 'desc_tip'    => true,
                         ],
                         'api_key' => [
@@ -158,43 +174,73 @@ class WCLSR_Purolator extends WCLSR_Base {
         // Okta OAuth2 client_credentials token
         // -------------------------------------------------------------------------
 
-        private function get_bearer_token( $client_id, $client_secret, $scope = 'openid' ) {
+        private function get_bearer_token( $client_id, $client_secret, $preferred_scope = 'shipping' ) {
+                // Check for a previously-discovered working scope (cached separately from the token).
+                $scope_cache_key = 'wclsr_purolator_scope_' . md5( $client_id );
+                $working_scope   = get_transient( $scope_cache_key );
+
+                // Build the ordered candidate list: working/preferred scope first, then all others deduplicated.
+                if ( $working_scope ) {
+                        $candidates = array_unique( array_merge( [ $working_scope ], self::SCOPE_CANDIDATES ) );
+                        $this->log( 'Purolator: previously-working scope = "' . $working_scope . '" — will use it first.' );
+                } else {
+                        $candidates = array_unique( array_merge(
+                                array_filter( [ $preferred_scope ] ),
+                                self::SCOPE_CANDIDATES
+                        ) );
+                }
+
+                foreach ( $candidates as $scope ) {
+                        $token = $this->try_fetch_token( $client_id, $client_secret, $scope );
+                        if ( $token ) {
+                                // Persist the working scope so we skip the probe next time.
+                                set_transient( $scope_cache_key, $scope, 12 * HOUR_IN_SECONDS );
+                                return $token;
+                        }
+                }
+
+                $this->log( 'Purolator: all scope candidates exhausted. Check WC logs for token errors. Email developer-support@purolator.com for your OAuth scope, then enter it in plugin settings.' );
+                return null;
+        }
+
+        /**
+         * Attempt a single token fetch for a specific scope.
+         * Returns the access token string on success, null on failure.
+         */
+        private function try_fetch_token( $client_id, $client_secret, $scope ) {
                 $cache_key = 'wclsr_purolator_tok_' . md5( $client_id . $scope );
                 $cached    = get_transient( $cache_key );
                 if ( $cached ) {
-                        $this->log( 'Purolator: using cached auth token.' );
+                        $this->log( 'Purolator: using cached token (scope=' . $scope . ').' );
                         return $cached;
                 }
 
-                $this->log( 'Purolator: requesting auth token from ' . self::TOKEN_URL . ' (client_id=' . substr( $client_id, 0, 8 ) . '... scope=' . $scope . ')' );
-
-                $body_params = [
-                        'grant_type'    => 'client_credentials',
-                        'client_id'     => $client_id,
-                        'client_secret' => $client_secret,
-                ];
-                if ( ! empty( $scope ) ) {
-                        $body_params['scope'] = $scope;
-                }
+                $this->log( 'Purolator: trying token (client_id=' . substr( $client_id, 0, 8 ) . '... scope=' . $scope . ')' );
 
                 $response = wp_remote_post( self::TOKEN_URL, [
                         'headers' => [
                                 'Content-Type' => 'application/x-www-form-urlencoded',
                                 'Accept'       => 'application/json',
                         ],
-                        'body'    => http_build_query( $body_params ),
-                        'timeout' => 15,
+                        'body'    => http_build_query( [
+                                'grant_type'    => 'client_credentials',
+                                'client_id'     => $client_id,
+                                'client_secret' => $client_secret,
+                                'scope'         => $scope,
+                        ] ),
+                        'timeout' => 10,
                 ] );
 
                 if ( is_wp_error( $response ) ) {
-                        $this->log( 'Purolator: auth HTTP error — ' . $response->get_error_message() );
+                        $this->log( 'Purolator: HTTP error for scope=' . $scope . ' — ' . $response->get_error_message() );
                         return null;
                 }
 
                 $code = wp_remote_retrieve_response_code( $response );
                 $body = wp_remote_retrieve_body( $response );
 
-                $this->log( "Purolator: auth response HTTP $code — " . substr( $body, 0, 800 ) );
+                // Always log full Okta response so admin can see exactly what failed.
+                $this->log( 'Purolator: scope=' . $scope . ' → HTTP ' . $code . ' — ' . substr( $body, 0, 600 ) );
 
                 if ( $code !== 200 ) {
                         return null;
@@ -204,14 +250,13 @@ class WCLSR_Purolator extends WCLSR_Base {
                 $token = $data['access_token'] ?? '';
 
                 if ( empty( $token ) ) {
-                        $this->log( 'Purolator: auth OK but no access_token in response.' );
+                        $this->log( 'Purolator: HTTP 200 but no access_token for scope=' . $scope );
                         return null;
                 }
 
                 $expires_in = (int) ( $data['expires_in'] ?? 3600 );
                 set_transient( $cache_key, $token, max( 60, $expires_in - 300 ) );
-
-                $this->log( 'Purolator: auth token obtained (expires_in=' . $expires_in . 's).' );
+                $this->log( 'Purolator: TOKEN OK for scope=' . $scope . ' (expires_in=' . $expires_in . 's).' );
 
                 return $token;
         }
