@@ -301,7 +301,7 @@ class WCLSR_Purolator extends WCLSR_Base {
         </ns:ReceiverInformation>
         <ns:ShipmentDate>{$e($ship_date)}</ns:ShipmentDate>
         <ns:PackageInformation>
-          <ns:ServiceID>AnyService</ns:ServiceID>
+          <ns:ServiceID>PurolatorExpress</ns:ServiceID>
           <ns:TotalWeight>
             <ns:Value>{$w}</ns:Value>
             <ns:WeightUnit>kg</ns:WeightUnit>
