@@ -2,471 +2,501 @@
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Purolator Live Rates — ship.purolator.com REST API
+ * Purolator Live Rates — SOAP API v2
  *
- * Credentials (ship.purolator.com → Developer Portal → Manage Apps → your app):
- *   - Client ID     → Okta client_id  (used in token request)
- *   - Client Secret → Okta client_secret (used in token request)
- *   - API Key       → X-Api-Key header  (used on every API call, separate from OAuth)
+ * Uses the Purolator Web Services SOAP API (EstimatingService v2).
+ * Authentication: HTTP Basic Auth (API Key : Password) — no OAuth required.
  *
- * Auth (Okta OAuth2 client_credentials):
- *   POST https://auth.purolator.com/oauth2/aus11x6a58hwZ5OOP5d7/v1/token
- *   Content-Type: application/x-www-form-urlencoded
- *   Body: grant_type=client_credentials&client_id=<client_id>&client_secret=<client_secret>
- *   → { access_token, token_type, expires_in }
+ * Credentials from your Purolator developer account:
+ *   API Key      → SOAP username  (from devwebservices.purolator.com developer registration)
+ *   API Password → SOAP password  (from devwebservices.purolator.com developer registration)
  *
- * Estimate:
- *   POST https://api.purolator.com/v1/estimates
- *   Authorization: Bearer <access_token>
- *   X-Api-Key: <api_key>
- *   Content-Type: application/json
+ * Endpoints:
+ *   Development : https://devwebservices.purolator.com/EWS/v2/Estimating/EstimatingService.asmx
+ *   Production  : https://webservices.purolator.com/EWS/v2/Estimating/EstimatingService.asmx
+ *
+ * SOAPAction: "http://purolator.com/pws/service/v2/GetFullEstimate"
  */
 class WCLSR_Purolator extends WCLSR_Base {
 
-        const TOKEN_URL    = 'https://auth.purolator.com/oauth2/aus11x6a58hwZ5OOP5d7/v1/token';
-        const ESTIMATE_URL = 'https://api.purolator.com/v1/estimates';
-
-        // Ordered list of scope candidates tried automatically when configured scope fails.
-        // The first one that returns a valid token wins and is cached.
-        const SCOPE_CANDIDATES = [
-                'shipping',
-                'courier',
-                'api',
-                'rates',
-                'estimate',
-                'estimates',
-                'purolator',
-                'default',
-                'openapi',
-                'write',
-                'read',
-        ];
-
-        public function __construct( $instance_id = 0 ) {
-                $this->id                 = 'wclsr_purolator';
-                $this->instance_id        = absint( $instance_id );
-                $this->method_title       = __( 'Purolator (Live Rates)', 'wc-live-shipping-rates' );
-                $this->method_description = __( 'Display live shipping rates from Purolator at checkout.', 'wc-live-shipping-rates' );
-                $this->supports           = [ 'shipping-zones', 'instance-settings' ];
-
-                $this->init();
-        }
-
-        public function init() {
-                $this->init_form_fields();
-                $this->init_settings();
-
-                $this->title   = $this->get_option( 'title', 'Purolator' );
-                $this->enabled = $this->get_option( 'enabled' );
-
-                add_action( 'woocommerce_update_options_shipping_' . $this->id, [ $this, 'process_admin_options' ] );
-        }
-
-        public function init_form_fields() {
-                $this->instance_form_fields = [
-                        'enabled' => [
-                                'title'   => __( 'Enable', 'wc-live-shipping-rates' ),
-                                'type'    => 'checkbox',
-                                'label'   => __( 'Enable Purolator live rates', 'wc-live-shipping-rates' ),
-                                'default' => 'yes',
-                        ],
-                        'title' => [
-                                'title'       => __( 'Method Title', 'wc-live-shipping-rates' ),
-                                'type'        => 'text',
-                                'default'     => 'Purolator',
-                                'desc_tip'    => true,
-                                'description' => __( 'Label shown to customers.', 'wc-live-shipping-rates' ),
-                        ],
-                        'client_id' => [
-                                'title'       => __( 'Client ID', 'wc-live-shipping-rates' ),
-                                'type'        => 'text',
-                                'description' => __( 'From ship.purolator.com → Developer Portal → Manage Apps → your app → Client ID. Used for OAuth2 authentication.', 'wc-live-shipping-rates' ),
-                                'default'     => '',
-                                'desc_tip'    => true,
-                        ],
-                        'client_secret' => [
-                                'title'       => __( 'Client Secret', 'wc-live-shipping-rates' ),
-                                'type'        => 'password',
-                                'description' => __( 'From ship.purolator.com → Developer Portal → Manage Apps → your app → Client Secret. Used for OAuth2 authentication.', 'wc-live-shipping-rates' ),
-                                'default'     => '',
-                                'desc_tip'    => true,
-                        ],
-                        'oauth_scope' => [
-                                'title'       => __( 'OAuth Scope (optional override)', 'wc-live-shipping-rates' ),
-                                'type'        => 'text',
-                                'description' => __( 'Leave blank to use automatic scope discovery — the plugin will try common scope values and remember the one that works. Only fill this in if you know your exact scope from Purolator support (developer-support@purolator.com). The WC log always shows each attempt so you can see exactly which scope succeeded or failed.', 'wc-live-shipping-rates' ),
-                                'default'     => '',
-                                'desc_tip'    => true,
-                        ],
-                        'api_key' => [
-                                'title'       => __( 'API Key', 'wc-live-shipping-rates' ),
-                                'type'        => 'text',
-                                'description' => __( 'From ship.purolator.com → Developer Portal → Manage Apps → your app → API Key. Sent as the X-Api-Key header on every API request.', 'wc-live-shipping-rates' ),
-                                'default'     => '',
-                                'desc_tip'    => true,
-                        ],
-                        'account_number' => [
-                                'title'       => __( 'Account Number', 'wc-live-shipping-rates' ),
-                                'type'        => 'text',
-                                'description' => __( 'Your Purolator billing account number (zero-padded to 7 digits automatically). Find it under Manage Apps → Test Sender Account.', 'wc-live-shipping-rates' ),
-                                'default'     => '',
-                                'desc_tip'    => true,
-                        ],
-                        'origin_postal_code' => [
-                                'title'       => __( 'Origin Postal Code', 'wc-live-shipping-rates' ),
-                                'type'        => 'text',
-                                'description' => __( 'Postal code your shipments originate from (e.g. K1A0B1).', 'wc-live-shipping-rates' ),
-                                'default'     => '',
-                                'desc_tip'    => true,
-                        ],
-                        'markup' => [
-                                'title'             => __( 'Rate Markup (%)', 'wc-live-shipping-rates' ),
-                                'type'              => 'number',
-                                'description'       => __( 'Optional percentage added on top of the carrier rate.', 'wc-live-shipping-rates' ),
-                                'default'           => '0',
-                                'desc_tip'          => true,
-                                'custom_attributes' => [ 'min' => '0', 'step' => '0.01' ],
-                        ],
-                ];
-        }
-
-        public function calculate_shipping( $package = [] ) {
-                $client_id      = trim( $this->get_option( 'client_id' ) );
-                $client_secret  = trim( $this->get_option( 'client_secret' ) );
-                $oauth_scope    = trim( $this->get_option( 'oauth_scope', 'openid' ) );
-                $api_key        = trim( $this->get_option( 'api_key' ) );
-                $account_number = trim( $this->get_option( 'account_number' ) );
-                $origin_postal  = preg_replace( '/\s+/', '', strtoupper( $this->get_option( 'origin_postal_code' ) ) );
-                $markup_pct     = (float) $this->get_option( 'markup', 0 );
-
-                if ( empty( $client_id ) || empty( $client_secret ) || empty( $api_key ) || empty( $account_number ) || empty( $origin_postal ) ) {
-                        $this->log( 'Purolator: missing credentials — check Client ID, Client Secret, API Key, Account Number, and Origin Postal Code in plugin settings.' );
-                        return;
-                }
-
-                $dest_postal = preg_replace( '/\s+/', '', strtoupper( $package['destination']['postcode'] ?? '' ) );
-                if ( empty( $dest_postal ) ) {
-                        $this->log( 'Purolator: no destination postal code.' );
-                        return;
-                }
-
-                // Purolator requires account number zero-padded to 7 digits
-                $account_number = str_pad( $account_number, 7, '0', STR_PAD_LEFT );
-
-                $weight_kg = $this->get_package_weight_kg( $package );
-                $dims      = $this->get_package_dims_cm( $package );
-
-                // Step 1 — Okta OAuth2 client_credentials token (cached as WP transient)
-                $token = $this->get_bearer_token( $client_id, $client_secret, $oauth_scope );
-                if ( ! $token ) {
-                        return;
-                }
-
-                // Step 2 — Purolator Estimate API
-                $this->send_estimate_request(
-                        $token, $api_key, $account_number,
-                        $origin_postal, $dest_postal,
-                        $weight_kg, $dims, $markup_pct
-                );
-        }
-
-        // -------------------------------------------------------------------------
-        // Okta OAuth2 client_credentials token
-        // -------------------------------------------------------------------------
-
-        private function get_bearer_token( $client_id, $client_secret, $preferred_scope = 'shipping' ) {
-                // Check for a previously-discovered working scope (cached separately from the token).
-                $scope_cache_key = 'wclsr_purolator_scope_' . md5( $client_id );
-                $working_scope   = get_transient( $scope_cache_key );
-
-                // Build the ordered candidate list: working/preferred scope first, then all others deduplicated.
-                if ( $working_scope ) {
-                        $candidates = array_unique( array_merge( [ $working_scope ], self::SCOPE_CANDIDATES ) );
-                        $this->log( 'Purolator: previously-working scope = "' . $working_scope . '" — will use it first.' );
-                } else {
-                        $candidates = array_unique( array_merge(
-                                array_filter( [ $preferred_scope ] ),
-                                self::SCOPE_CANDIDATES
-                        ) );
-                }
-
-                foreach ( $candidates as $scope ) {
-                        $token = $this->try_fetch_token( $client_id, $client_secret, $scope );
-                        if ( $token ) {
-                                // Persist the working scope so we skip the probe next time.
-                                set_transient( $scope_cache_key, $scope, 12 * HOUR_IN_SECONDS );
-                                return $token;
-                        }
-                }
-
-                $this->log( 'Purolator: all scope candidates exhausted. Check WC logs for token errors. Email developer-support@purolator.com for your OAuth scope, then enter it in plugin settings.' );
-                return null;
-        }
-
-        /**
-         * Attempt a single token fetch for a specific scope.
-         * Returns the access token string on success, null on failure.
-         */
-        private function try_fetch_token( $client_id, $client_secret, $scope ) {
-                $cache_key = 'wclsr_purolator_tok_' . md5( $client_id . $scope );
-                $cached    = get_transient( $cache_key );
-                if ( $cached ) {
-                        $this->log( 'Purolator: using cached token (scope=' . $scope . ').' );
-                        return $cached;
-                }
-
-                $this->log( 'Purolator: trying token (client_id=' . substr( $client_id, 0, 8 ) . '... scope=' . $scope . ')' );
-
-                $response = wp_remote_post( self::TOKEN_URL, [
-                        'headers' => [
-                                'Content-Type' => 'application/x-www-form-urlencoded',
-                                'Accept'       => 'application/json',
-                        ],
-                        'body'    => http_build_query( [
-                                'grant_type'    => 'client_credentials',
-                                'client_id'     => $client_id,
-                                'client_secret' => $client_secret,
-                                'scope'         => $scope,
-                        ] ),
-                        'timeout' => 10,
-                ] );
-
-                if ( is_wp_error( $response ) ) {
-                        $this->log( 'Purolator: HTTP error for scope=' . $scope . ' — ' . $response->get_error_message() );
-                        return null;
-                }
-
-                $code = wp_remote_retrieve_response_code( $response );
-                $body = wp_remote_retrieve_body( $response );
-
-                // Always log full Okta response so admin can see exactly what failed.
-                $this->log( 'Purolator: scope=' . $scope . ' → HTTP ' . $code . ' — ' . substr( $body, 0, 600 ) );
-
-                if ( $code !== 200 ) {
-                        return null;
-                }
-
-                $data  = json_decode( $body, true );
-                $token = $data['access_token'] ?? '';
-
-                if ( empty( $token ) ) {
-                        $this->log( 'Purolator: HTTP 200 but no access_token for scope=' . $scope );
-                        return null;
-                }
-
-                $expires_in = (int) ( $data['expires_in'] ?? 3600 );
-                set_transient( $cache_key, $token, max( 60, $expires_in - 300 ) );
-                $this->log( 'Purolator: TOKEN OK for scope=' . $scope . ' (expires_in=' . $expires_in . 's).' );
-
-                return $token;
-        }
-
-        // -------------------------------------------------------------------------
-        // Estimate request
-        // -------------------------------------------------------------------------
-
-        private function send_estimate_request( $token, $api_key, $account_number, $origin_postal, $dest_postal, $weight_kg, $dims, $markup_pct ) {
-                $ship_date = $this->get_next_business_day();
-
-                $payload = [
-                        'shipmentDate'        => $ship_date,
-                        'lineOfBusiness'      => 'Courier',
-                        'senderInformation'   => [
-                                'address' => [
-                                        'postalCode' => $origin_postal,
-                                        'country'    => 'CA',
-                                ],
-                        ],
-                        'receiverInformation' => [
-                                'address' => [
-                                        'postalCode' => $dest_postal,
-                                        'country'    => 'CA',
-                                ],
-                        ],
-                        'packageInformation'  => [
-                                'totalWeight' => [
-                                        'value'      => $weight_kg,
-                                        'weightUnit' => 'kg',
-                                ],
-                                'totalPieces'       => 1,
-                                'piecesInformation' => [
-                                        [
-                                                'weight' => [ 'value' => $weight_kg, 'weightUnit' => 'kg' ],
-                                                'length' => [ 'value' => $dims['length'], 'dimensionUnit' => 'cm' ],
-                                                'width'  => [ 'value' => $dims['width'],  'dimensionUnit' => 'cm' ],
-                                                'height' => [ 'value' => $dims['height'], 'dimensionUnit' => 'cm' ],
-                                        ],
-                                ],
-                        ],
-                        'paymentInformation'  => [
-                                'paymentType'             => 'Sender',
-                                'registeredAccountNumber' => $account_number,
-                        ],
-                        'pickupInformation'   => [
-                                'pickupType' => 'DropOff',
-                        ],
-                        'showAlternativeServicesIndicator' => true,
-                ];
-
-                $this->log( sprintf(
-                        'Purolator: estimate → %s | origin=%s dest=%s weight=%.3fkg dims=%sx%sx%scm acct=%s date=%s',
-                        self::ESTIMATE_URL, $origin_postal, $dest_postal,
-                        $weight_kg, $dims['length'], $dims['width'], $dims['height'],
-                        $account_number, $ship_date
-                ) );
-                $this->log( 'Purolator: payload = ' . wp_json_encode( $payload ) );
-
-                $response = wp_remote_post( self::ESTIMATE_URL, [
-                        'headers' => [
-                                'Content-Type'  => 'application/json',
-                                'Accept'        => 'application/json',
-                                'Authorization' => 'Bearer ' . $token,
-                                'X-Api-Key'     => $api_key,
-                        ],
-                        'body'    => wp_json_encode( $payload ),
-                        'timeout' => 20,
-                ] );
-
-                if ( is_wp_error( $response ) ) {
-                        $this->log( 'Purolator: estimate HTTP error — ' . $response->get_error_message() );
-                        return;
-                }
-
-                $code = wp_remote_retrieve_response_code( $response );
-                $body = wp_remote_retrieve_body( $response );
-
-                $this->log( "Purolator: estimate response HTTP $code — " . substr( $body, 0, 1200 ) );
-
-                if ( $code !== 200 ) {
-                        return;
-                }
-
-                $this->parse_rates( $body, $markup_pct );
-        }
-
-        // -------------------------------------------------------------------------
-        // Rate parsing
-        // -------------------------------------------------------------------------
-
-        private function parse_rates( $body, $markup_pct ) {
-                $data = json_decode( $body, true );
-
-                if ( ! is_array( $data ) ) {
-                        $this->log( 'Purolator: could not JSON-decode estimate response.' );
-                        return;
-                }
-
-                // Try known response envelope keys
-                $rates = $data['shipmentEstimates']
-                        ?? $data['estimates']
-                        ?? $data['rates']
-                        ?? $data['services']
-                        ?? [];
-
-                if ( empty( $rates ) && isset( $data['serviceID'] ) ) {
-                        $rates = [ $data ];
-                }
-
-                if ( empty( $rates ) ) {
-                        $this->log( 'Purolator: no rate array found. Top-level keys: ' . implode( ', ', array_keys( $data ) ) );
-                        return;
-                }
-
-                $added = 0;
-                foreach ( $rates as $rate ) {
-                        $service_id   = $rate['serviceID'] ?? $rate['serviceCode'] ?? $rate['service'] ?? '';
-                        $service_name = $rate['serviceName'] ?? $rate['serviceDescription'] ?? $rate['name'] ?? $service_id;
-
-                        if ( isset( $rate['totalPrice']['value'] ) ) {
-                                $base_price = (float) $rate['totalPrice']['value'];
-                        } elseif ( isset( $rate['totalPrice']['amount'] ) ) {
-                                $base_price = (float) $rate['totalPrice']['amount'];
-                        } else {
-                                $base_price = (float) ( $rate['totalPrice'] ?? $rate['total'] ?? $rate['amount'] ?? $rate['price'] ?? 0 );
-                        }
-
-                        if ( $base_price <= 0 ) {
-                                continue;
-                        }
-
-                        $final = $base_price * ( 1 + $markup_pct / 100 );
-
-                        $this->add_rate( [
-                                'id'    => $this->id . '_' . sanitize_key( $service_id ),
-                                'label' => 'Purolator: ' . ( $service_name ?: $service_id ),
-                                'cost'  => round( $final, 2 ),
-                        ] );
-                        $added++;
-                }
-
-                $this->log( "Purolator: added $added rate(s)." );
-        }
-
-        // -------------------------------------------------------------------------
-        // Helpers
-        // -------------------------------------------------------------------------
-
-        private function get_next_business_day() {
-                $date = new DateTime( 'now', new DateTimeZone( 'America/Toronto' ) );
-                $day  = (int) $date->format( 'N' );
-                if ( $day >= 5 ) {
-                        $date->modify( '+' . ( 8 - $day ) . ' days' );
-                } else {
-                        $date->modify( '+1 day' );
-                }
-                return $date->format( 'Y-m-d' );
-        }
-
-        private function get_package_weight_kg( $package ) {
-                $weight_unit  = get_option( 'woocommerce_weight_unit', 'kg' );
-                $total_weight = 0;
-
-                foreach ( $package['contents'] as $item ) {
-                        $total_weight += (float) $item['data']->get_weight() * (int) $item['quantity'];
-                }
-
-                if ( $total_weight <= 0 ) $total_weight = 0.5;
-
-                switch ( $weight_unit ) {
-                        case 'lbs': $total_weight *= 0.453592;  break;
-                        case 'oz':  $total_weight *= 0.0283495; break;
-                        case 'g':   $total_weight /= 1000;      break;
-                }
-
-                return round( max( 0.1, $total_weight ), 3 );
-        }
-
-        private function get_package_dims_cm( $package ) {
-                $dim_unit = get_option( 'woocommerce_dimension_unit', 'cm' );
-                $length   = 30; $width = 20; $height = 15;
-
-                foreach ( $package['contents'] as $item ) {
-                        $product = $item['data'];
-                        $l = (float) $product->get_length();
-                        $w = (float) $product->get_width();
-                        $h = (float) $product->get_height();
-                        if ( $l > 0 ) $length = max( $length, $l );
-                        if ( $w > 0 ) $width  = max( $width,  $w );
-                        if ( $h > 0 ) $height = max( $height, $h );
-                }
-
-                $mult = 1;
-                switch ( $dim_unit ) {
-                        case 'mm': $mult = 0.1;  break;
-                        case 'in': $mult = 2.54; break;
-                        case 'm':  $mult = 100;  break;
-                }
-
-                return [
-                        'length' => max( 1, round( $length * $mult, 1 ) ),
-                        'width'  => max( 1, round( $width  * $mult, 1 ) ),
-                        'height' => max( 1, round( $height * $mult, 1 ) ),
-                ];
-        }
-
-        private function log( $message ) {
-                $logger  = wc_get_logger();
-                $context = [ 'source' => 'wclsr-purolator' ];
-                $logger->error( $message, $context );
-        }
+	const ENDPOINT_DEV  = 'https://devwebservices.purolator.com/EWS/v2/Estimating/EstimatingService.asmx';
+	const ENDPOINT_PROD = 'https://webservices.purolator.com/EWS/v2/Estimating/EstimatingService.asmx';
+	const SOAP_NS       = 'http://purolator.com/pws/datatypes/v2';
+	const SOAP_ACTION   = '"http://purolator.com/pws/service/v2/GetFullEstimate"';
+
+	const SERVICE_NAMES = [
+		'PurolatorExpress'                => 'Purolator Express',
+		'PurolatorExpress9AM'             => 'Purolator Express 9 AM',
+		'PurolatorExpress10:30AM'         => 'Purolator Express 10:30 AM',
+		'PurolatorExpressEvening'         => 'Purolator Express Evening',
+		'PurolatorExpressEnvelope'        => 'Purolator Express Envelope',
+		'PurolatorExpressEnvelope9AM'     => 'Purolator Express Envelope 9 AM',
+		'PurolatorExpressEnvelope10:30AM' => 'Purolator Express Envelope 10:30 AM',
+		'PurolatorExpressEnvelopeEvening' => 'Purolator Express Envelope Evening',
+		'PurolatorExpressPack'            => 'Purolator Express Pack',
+		'PurolatorExpressPack9AM'         => 'Purolator Express Pack 9 AM',
+		'PurolatorExpressPack10:30AM'     => 'Purolator Express Pack 10:30 AM',
+		'PurolatorExpressPackEvening'     => 'Purolator Express Pack Evening',
+		'PurolatorExpressBox'             => 'Purolator Express Box',
+		'PurolatorExpressBox9AM'          => 'Purolator Express Box 9 AM',
+		'PurolatorExpressBox10:30AM'      => 'Purolator Express Box 10:30 AM',
+		'PurolatorExpressBoxEvening'      => 'Purolator Express Box Evening',
+		'PurolatorGround'                 => 'Purolator Ground',
+		'PurolatorGround9AM'              => 'Purolator Ground 9 AM',
+		'PurolatorGround10:30AM'          => 'Purolator Ground 10:30 AM',
+		'PurolatorGroundEvening'          => 'Purolator Ground Evening',
+		'PurolatorGroundRegular'          => 'Purolator Ground Regular',
+		'PurolatorQuickShip'              => 'Purolator Quick Ship',
+		'PurolatorQuickShipEnvelope'      => 'Purolator Quick Ship Envelope',
+		'PurolatorQuickShipPack'          => 'Purolator Quick Ship Pack',
+		'PurolatorQuickShipBox'           => 'Purolator Quick Ship Box',
+	];
+
+	public function __construct( $instance_id = 0 ) {
+		$this->id                 = 'wclsr_purolator';
+		$this->instance_id        = absint( $instance_id );
+		$this->method_title       = __( 'Purolator (Live Rates)', 'wc-live-shipping-rates' );
+		$this->method_description = __( 'Display live shipping rates from Purolator at checkout using the Purolator Web Services SOAP API v2.', 'wc-live-shipping-rates' );
+		$this->supports           = [ 'shipping-zones', 'instance-settings' ];
+
+		$this->init();
+	}
+
+	public function init() {
+		$this->init_form_fields();
+		$this->init_settings();
+
+		$this->title   = $this->get_option( 'title', 'Purolator' );
+		$this->enabled = $this->get_option( 'enabled' );
+
+		add_action( 'woocommerce_update_options_shipping_' . $this->id, [ $this, 'process_admin_options' ] );
+	}
+
+	public function init_form_fields() {
+		$this->instance_form_fields = [
+			'enabled' => [
+				'title'   => __( 'Enable', 'wc-live-shipping-rates' ),
+				'type'    => 'checkbox',
+				'label'   => __( 'Enable Purolator live rates', 'wc-live-shipping-rates' ),
+				'default' => 'yes',
+			],
+			'title' => [
+				'title'       => __( 'Method Title', 'wc-live-shipping-rates' ),
+				'type'        => 'text',
+				'default'     => 'Purolator',
+				'desc_tip'    => true,
+				'description' => __( 'Label shown to customers at checkout.', 'wc-live-shipping-rates' ),
+			],
+			'environment' => [
+				'title'       => __( 'Environment', 'wc-live-shipping-rates' ),
+				'type'        => 'select',
+				'description' => __( 'Use Development to test with Purolator\'s sandbox before going live. Switch to Production when ready.', 'wc-live-shipping-rates' ),
+				'default'     => 'development',
+				'desc_tip'    => true,
+				'options'     => [
+					'development' => __( 'Development (devwebservices.purolator.com)', 'wc-live-shipping-rates' ),
+					'production'  => __( 'Production (webservices.purolator.com)', 'wc-live-shipping-rates' ),
+				],
+			],
+			'api_key' => [
+				'title'       => __( 'API Key', 'wc-live-shipping-rates' ),
+				'type'        => 'text',
+				'description' => __( 'Your Purolator SOAP API Key — used as the HTTP Basic Auth username. Obtained when you register at devwebservices.purolator.com.', 'wc-live-shipping-rates' ),
+				'default'     => '',
+				'desc_tip'    => true,
+			],
+			'api_password' => [
+				'title'       => __( 'API Password', 'wc-live-shipping-rates' ),
+				'type'        => 'password',
+				'description' => __( 'Your Purolator SOAP API Password (PIN) — used as the HTTP Basic Auth password. Obtained alongside your API Key from devwebservices.purolator.com.', 'wc-live-shipping-rates' ),
+				'default'     => '',
+				'desc_tip'    => true,
+			],
+			'account_number' => [
+				'title'       => __( 'Account Number', 'wc-live-shipping-rates' ),
+				'type'        => 'text',
+				'description' => __( 'Your Purolator billing account number (automatically zero-padded to 7 digits). Found in your Purolator account or developer portal under Test Sender Account.', 'wc-live-shipping-rates' ),
+				'default'     => '',
+				'desc_tip'    => true,
+			],
+			'origin_postal_code' => [
+				'title'       => __( 'Origin Postal Code', 'wc-live-shipping-rates' ),
+				'type'        => 'text',
+				'description' => __( 'Canadian postal code your shipments originate from (e.g. K1A0B1). No spaces needed.', 'wc-live-shipping-rates' ),
+				'default'     => '',
+				'desc_tip'    => true,
+			],
+			'origin_city' => [
+				'title'       => __( 'Origin City', 'wc-live-shipping-rates' ),
+				'type'        => 'text',
+				'description' => __( 'City your shipments originate from (e.g. Ottawa). Required by the Purolator SOAP API.', 'wc-live-shipping-rates' ),
+				'default'     => '',
+				'desc_tip'    => true,
+			],
+			'origin_province' => [
+				'title'       => __( 'Origin Province', 'wc-live-shipping-rates' ),
+				'type'        => 'text',
+				'description' => __( 'Two-letter province code your shipments originate from (e.g. ON, QC, BC, AB).', 'wc-live-shipping-rates' ),
+				'default'     => 'ON',
+				'desc_tip'    => true,
+			],
+			'markup' => [
+				'title'             => __( 'Rate Markup (%)', 'wc-live-shipping-rates' ),
+				'type'              => 'number',
+				'description'       => __( 'Optional percentage added on top of the Purolator rate shown to customers.', 'wc-live-shipping-rates' ),
+				'default'           => '0',
+				'desc_tip'          => true,
+				'custom_attributes' => [ 'min' => '0', 'step' => '0.01' ],
+			],
+		];
+	}
+
+	// -------------------------------------------------------------------------
+	// Main shipping calculation
+	// -------------------------------------------------------------------------
+
+	public function calculate_shipping( $package = [] ) {
+		$api_key         = trim( $this->get_option( 'api_key' ) );
+		$api_password    = trim( $this->get_option( 'api_password' ) );
+		$account_number  = trim( $this->get_option( 'account_number' ) );
+		$origin_postal   = preg_replace( '/\s+/', '', strtoupper( $this->get_option( 'origin_postal_code' ) ) );
+		$origin_city     = trim( $this->get_option( 'origin_city', 'Origin' ) );
+		$origin_province = strtoupper( trim( $this->get_option( 'origin_province', 'ON' ) ) );
+		$environment     = $this->get_option( 'environment', 'development' );
+		$markup_pct      = (float) $this->get_option( 'markup', 0 );
+
+		if ( empty( $api_key ) || empty( $api_password ) || empty( $account_number ) || empty( $origin_postal ) ) {
+			$this->log( 'Purolator: missing credentials — fill in API Key, API Password, Account Number, and Origin Postal Code in the plugin settings.' );
+			return;
+		}
+
+		$dest_postal   = preg_replace( '/\s+/', '', strtoupper( $package['destination']['postcode'] ?? '' ) );
+		$dest_city     = trim( $package['destination']['city'] ?? '' );
+		$dest_province = strtoupper( trim( $package['destination']['state'] ?? '' ) );
+		$dest_country  = strtoupper( trim( $package['destination']['country'] ?? 'CA' ) );
+
+		if ( empty( $dest_postal ) ) {
+			$this->log( 'Purolator: no destination postal code — cannot calculate rate.' );
+			return;
+		}
+
+		// Purolator SOAP requires city/province — use safe defaults if checkout hasn't captured them yet.
+		if ( empty( $dest_city ) )     $dest_city     = 'City';
+		if ( empty( $dest_province ) ) $dest_province = 'ON';
+		if ( empty( $dest_country ) )  $dest_country  = 'CA';
+		if ( empty( $origin_city ) )   $origin_city   = 'Origin';
+
+		// Zero-pad account number to 7 digits.
+		$account_number = str_pad( ltrim( $account_number, '0' ) ?: '0', 7, '0', STR_PAD_LEFT );
+
+		$weight_kg  = $this->get_package_weight_kg( $package );
+		$dims       = $this->get_package_dims_cm( $package );
+		$ship_date  = $this->get_next_business_day();
+		$endpoint   = ( $environment === 'production' ) ? self::ENDPOINT_PROD : self::ENDPOINT_DEV;
+
+		$this->log( sprintf(
+			'Purolator SOAP (%s): origin=%s %s/%s → dest=%s %s/%s | weight=%.3fkg dims=%sx%sx%scm acct=%s date=%s',
+			$environment, $origin_postal, $origin_city, $origin_province,
+			$dest_postal, $dest_city, $dest_province,
+			$weight_kg, $dims['length'], $dims['width'], $dims['height'],
+			$account_number, $ship_date
+		) );
+
+		$soap_xml = $this->build_soap_xml(
+			$origin_postal, $origin_city, $origin_province,
+			$dest_postal, $dest_city, $dest_province, $dest_country,
+			$weight_kg, $dims, $account_number, $ship_date
+		);
+
+		$response = wp_remote_post( $endpoint, [
+			'headers' => [
+				'Content-Type'  => 'text/xml; charset=utf-8',
+				'SOAPAction'    => self::SOAP_ACTION,
+				'Authorization' => 'Basic ' . base64_encode( $api_key . ':' . $api_password ),
+			],
+			'body'    => $soap_xml,
+			'timeout' => 20,
+		] );
+
+		if ( is_wp_error( $response ) ) {
+			$this->log( 'Purolator SOAP: HTTP error — ' . $response->get_error_message() );
+			return;
+		}
+
+		$code = wp_remote_retrieve_response_code( $response );
+		$body = wp_remote_retrieve_body( $response );
+
+		$this->log( "Purolator SOAP: HTTP $code — " . substr( $body, 0, 2000 ) );
+
+		if ( $code !== 200 ) {
+			return;
+		}
+
+		$this->parse_soap_response( $body, $markup_pct );
+	}
+
+	// -------------------------------------------------------------------------
+	// SOAP request builder
+	// -------------------------------------------------------------------------
+
+	private function build_soap_xml(
+		$origin_postal, $origin_city, $origin_province,
+		$dest_postal, $dest_city, $dest_province, $dest_country,
+		$weight_kg, $dims, $account_number, $ship_date
+	) {
+		$w  = number_format( $weight_kg, 3, '.', '' );
+		$l  = number_format( $dims['length'], 1, '.', '' );
+		$wi = number_format( $dims['width'],  1, '.', '' );
+		$h  = number_format( $dims['height'], 1, '.', '' );
+
+		$e = static function( $v ) { return htmlspecialchars( (string) $v, ENT_XML1, 'UTF-8' ); };
+
+		return <<<XML
+<?xml version="1.0" encoding="utf-8"?>
+<SOAP-ENV:Envelope
+    xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"
+    xmlns:ns="http://purolator.com/pws/datatypes/v2">
+  <SOAP-ENV:Header>
+    <ns:RequestContext>
+      <ns:Version>2.0</ns:Version>
+      <ns:Language>en</ns:Language>
+      <ns:GroupID>wclsr</ns:GroupID>
+      <ns:RequestReference>WooCommerce Checkout</ns:RequestReference>
+    </ns:RequestContext>
+  </SOAP-ENV:Header>
+  <SOAP-ENV:Body>
+    <ns:GetFullEstimateRequest>
+      <ns:Shipment>
+        <ns:SenderInformation>
+          <ns:Address>
+            <ns:Name>Shipper</ns:Name>
+            <ns:StreetNumber>1</ns:StreetNumber>
+            <ns:StreetName>Origin St</ns:StreetName>
+            <ns:City>{$e($origin_city)}</ns:City>
+            <ns:Province>{$e($origin_province)}</ns:Province>
+            <ns:Country>CA</ns:Country>
+            <ns:PostalCode>{$e($origin_postal)}</ns:PostalCode>
+            <ns:PhoneNumber>
+              <ns:CountryCode>1</ns:CountryCode>
+              <ns:AreaCode>613</ns:AreaCode>
+              <ns:Phone>5550000</ns:Phone>
+            </ns:PhoneNumber>
+          </ns:Address>
+        </ns:SenderInformation>
+        <ns:ReceiverInformation>
+          <ns:Address>
+            <ns:Name>Receiver</ns:Name>
+            <ns:StreetNumber>1</ns:StreetNumber>
+            <ns:StreetName>Destination St</ns:StreetName>
+            <ns:City>{$e($dest_city)}</ns:City>
+            <ns:Province>{$e($dest_province)}</ns:Province>
+            <ns:Country>{$e($dest_country)}</ns:Country>
+            <ns:PostalCode>{$e($dest_postal)}</ns:PostalCode>
+            <ns:PhoneNumber>
+              <ns:CountryCode>1</ns:CountryCode>
+              <ns:AreaCode>416</ns:AreaCode>
+              <ns:Phone>5550000</ns:Phone>
+            </ns:PhoneNumber>
+          </ns:Address>
+        </ns:ReceiverInformation>
+        <ns:ShipmentDate>{$e($ship_date)}</ns:ShipmentDate>
+        <ns:PackageInformation>
+          <ns:ServiceID>AnyService</ns:ServiceID>
+          <ns:TotalWeight>
+            <ns:Value>{$w}</ns:Value>
+            <ns:WeightUnit>kg</ns:WeightUnit>
+          </ns:TotalWeight>
+          <ns:TotalPieces>1</ns:TotalPieces>
+          <ns:PiecesInformation>
+            <ns:Piece>
+              <ns:Weight>
+                <ns:Value>{$w}</ns:Value>
+                <ns:WeightUnit>kg</ns:WeightUnit>
+              </ns:Weight>
+              <ns:Length>
+                <ns:Value>{$l}</ns:Value>
+                <ns:DimensionUnit>cm</ns:DimensionUnit>
+              </ns:Length>
+              <ns:Width>
+                <ns:Value>{$wi}</ns:Value>
+                <ns:DimensionUnit>cm</ns:DimensionUnit>
+              </ns:Width>
+              <ns:Height>
+                <ns:Value>{$h}</ns:Value>
+                <ns:DimensionUnit>cm</ns:DimensionUnit>
+              </ns:Height>
+            </ns:Piece>
+          </ns:PiecesInformation>
+        </ns:PackageInformation>
+        <ns:PaymentInformation>
+          <ns:PaymentType>Sender</ns:PaymentType>
+          <ns:RegisteredAccountNumber>{$e($account_number)}</ns:RegisteredAccountNumber>
+        </ns:PaymentInformation>
+        <ns:PickupInformation>
+          <ns:PickupType>DropOff</ns:PickupType>
+        </ns:PickupInformation>
+      </ns:Shipment>
+      <ns:ShowAlternativeServicesIndicator>true</ns:ShowAlternativeServicesIndicator>
+    </ns:GetFullEstimateRequest>
+  </SOAP-ENV:Body>
+</SOAP-ENV:Envelope>
+XML;
+	}
+
+	// -------------------------------------------------------------------------
+	// SOAP response parser
+	// -------------------------------------------------------------------------
+
+	private function parse_soap_response( $xml_body, $markup_pct ) {
+		libxml_use_internal_errors( true );
+		$xml = simplexml_load_string( $xml_body );
+		libxml_clear_errors();
+
+		if ( ! $xml ) {
+			$this->log( 'Purolator SOAP: failed to parse XML response.' );
+			return;
+		}
+
+		$xml->registerXPathNamespace( 'env', 'http://schemas.xmlsoap.org/soap/envelope/' );
+		$xml->registerXPathNamespace( 'pws', self::SOAP_NS );
+
+		// Check for SOAP faults first.
+		$faults = $xml->xpath( '//env:Fault' );
+		if ( ! empty( $faults ) ) {
+			$fault = $faults[0];
+			$this->log( 'Purolator SOAP: SOAP fault — ' . (string) ( $fault->faultstring ?? $fault->faultcode ?? 'unknown' ) );
+			return;
+		}
+
+		// Log any API-level errors from ResponseInformation.
+		$errors = $xml->xpath( '//pws:Error' );
+		if ( ! empty( $errors ) ) {
+			foreach ( $errors as $err ) {
+				$this->log( 'Purolator SOAP: API error — Code=' . (string) $err->Code . ' | ' . (string) $err->Description );
+			}
+		}
+
+		// Extract ShipmentEstimate nodes.
+		$estimates = $xml->xpath( '//pws:ShipmentEstimate' );
+
+		if ( empty( $estimates ) ) {
+			$this->log( 'Purolator SOAP: no ShipmentEstimate elements found in response. Check API errors above.' );
+			return;
+		}
+
+		$added = 0;
+		foreach ( $estimates as $est ) {
+			$service_id  = (string) $est->ServiceID;
+			$total_price = (float)  $est->TotalPrice;
+			$delivery    = (string) ( $est->ExpectedDeliveryDate ?? '' );
+			$transit     = (int)    ( $est->EstimatedTransitDays ?? 0 );
+
+			if ( empty( $service_id ) || $total_price <= 0 ) {
+				continue;
+			}
+
+			$label = $this->format_service_label( $service_id, $delivery, $transit );
+			$cost  = round( $total_price * ( 1 + $markup_pct / 100 ), 2 );
+
+			$this->add_rate( [
+				'id'    => $this->id . '_' . sanitize_key( $service_id ),
+				'label' => $label,
+				'cost'  => $cost,
+			] );
+
+			$added++;
+			$this->log( sprintf( 'Purolator SOAP: rate added — %s $%.2f', $service_id, $cost ) );
+		}
+
+		if ( $added === 0 ) {
+			$this->log( 'Purolator SOAP: response parsed but no valid rates found.' );
+		} else {
+			$this->log( "Purolator SOAP: $added rate(s) added." );
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// Helpers
+	// -------------------------------------------------------------------------
+
+	private function format_service_label( $service_id, $delivery_date, $transit_days ) {
+		$name = self::SERVICE_NAMES[ $service_id ]
+			?? preg_replace( '/(?<=[a-z])(?=[A-Z0-9])/', ' ', $service_id );
+
+		$suffix = '';
+		if ( ! empty( $delivery_date ) && preg_match( '/^\d{4}-\d{2}-\d{2}/', $delivery_date ) ) {
+			$suffix = ' — ' . date_i18n( get_option( 'date_format', 'Y-m-d' ), strtotime( $delivery_date ) );
+		} elseif ( $transit_days > 0 ) {
+			$suffix = ' — ' . sprintf(
+				_n( '%d business day', '%d business days', $transit_days, 'wc-live-shipping-rates' ),
+				$transit_days
+			);
+		}
+
+		return $name . $suffix;
+	}
+
+	private function get_next_business_day() {
+		$date = new DateTime( 'now', new DateTimeZone( 'America/Toronto' ) );
+		$day  = (int) $date->format( 'N' );
+		if ( $day >= 5 ) {
+			$date->modify( '+' . ( 8 - $day ) . ' days' );
+		} else {
+			$date->modify( '+1 day' );
+		}
+		return $date->format( 'Y-m-d' );
+	}
+
+	private function get_package_weight_kg( $package ) {
+		$weight_unit  = get_option( 'woocommerce_weight_unit', 'kg' );
+		$total_weight = 0;
+
+		foreach ( $package['contents'] as $item ) {
+			$total_weight += (float) $item['data']->get_weight() * (int) $item['quantity'];
+		}
+
+		if ( $total_weight <= 0 ) $total_weight = 0.5;
+
+		switch ( $weight_unit ) {
+			case 'lbs': $total_weight *= 0.453592;  break;
+			case 'oz':  $total_weight *= 0.0283495; break;
+			case 'g':   $total_weight /= 1000;      break;
+		}
+
+		return round( max( 0.1, $total_weight ), 3 );
+	}
+
+	private function get_package_dims_cm( $package ) {
+		$dim_unit = get_option( 'woocommerce_dimension_unit', 'cm' );
+		$length   = 30; $width = 20; $height = 15;
+
+		foreach ( $package['contents'] as $item ) {
+			$product = $item['data'];
+			$l = (float) $product->get_length();
+			$w = (float) $product->get_width();
+			$h = (float) $product->get_height();
+			if ( $l > 0 ) $length = max( $length, $l );
+			if ( $w > 0 ) $width  = max( $width,  $w );
+			if ( $h > 0 ) $height = max( $height, $h );
+		}
+
+		$mult = 1;
+		switch ( $dim_unit ) {
+			case 'mm': $mult = 0.1;  break;
+			case 'in': $mult = 2.54; break;
+			case 'm':  $mult = 100;  break;
+		}
+
+		return [
+			'length' => max( 1, round( $length * $mult, 1 ) ),
+			'width'  => max( 1, round( $width  * $mult, 1 ) ),
+			'height' => max( 1, round( $height * $mult, 1 ) ),
+		];
+	}
+
+	private function log( $message ) {
+		$logger  = wc_get_logger();
+		$context = [ 'source' => 'wclsr-purolator' ];
+		$logger->error( $message, $context );
+	}
 }
