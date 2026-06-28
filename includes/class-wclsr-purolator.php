@@ -140,6 +140,14 @@ class WCLSR_Purolator extends WCLSR_Base {
                                 'default'     => 'ON',
                                 'desc_tip'    => true,
                         ],
+                        'processing_days' => [
+                                'title'             => __( 'Processing Time (business days)', 'wc-live-shipping-rates' ),
+                                'type'              => 'number',
+                                'description'       => __( 'Number of business days you need to prepare an order before it ships. The ship date sent to Purolator is offset by this many business days, so delivery estimates shown at checkout already include your handling time.', 'wc-live-shipping-rates' ),
+                                'default'           => '3',
+                                'desc_tip'          => true,
+                                'custom_attributes' => [ 'min' => '1', 'max' => '30', 'step' => '1' ],
+                        ],
                         'markup' => [
                                 'title'             => __( 'Rate Markup (%)', 'wc-live-shipping-rates' ),
                                 'type'              => 'number',
@@ -189,10 +197,11 @@ class WCLSR_Purolator extends WCLSR_Base {
                 // Zero-pad account number to 7 digits.
                 $account_number = str_pad( ltrim( $account_number, '0' ) ?: '0', 7, '0', STR_PAD_LEFT );
 
-                $weight_kg  = $this->get_package_weight_kg( $package );
-                $dims       = $this->get_package_dims_cm( $package );
-                $ship_date  = $this->get_next_business_day();
-                $endpoint   = ( $environment === 'production' ) ? self::ENDPOINT_PROD : self::ENDPOINT_DEV;
+                $weight_kg       = $this->get_package_weight_kg( $package );
+                $dims            = $this->get_package_dims_cm( $package );
+                $processing_days = max( 1, (int) $this->get_option( 'processing_days', 3 ) );
+                $ship_date       = $this->get_ship_date( $processing_days );
+                $endpoint        = ( $environment === 'production' ) ? self::ENDPOINT_PROD : self::ENDPOINT_DEV;
 
                 $this->log( sprintf(
                         'Purolator SOAP (%s): origin=%s %s/%s → dest=%s %s/%s | weight=%.3fkg dims=%sx%sx%scm acct=%s date=%s',
@@ -484,13 +493,15 @@ XML;
                 return $name . $suffix;
         }
 
-        private function get_next_business_day() {
-                $date = new DateTime( 'now', new DateTimeZone( 'America/Toronto' ) );
-                $day  = (int) $date->format( 'N' );
-                if ( $day >= 5 ) {
-                        $date->modify( '+' . ( 8 - $day ) . ' days' );
-                } else {
+        private function get_ship_date( $business_days = 1 ) {
+                $date  = new DateTime( 'now', new DateTimeZone( 'America/Toronto' ) );
+                $added = 0;
+                while ( $added < $business_days ) {
                         $date->modify( '+1 day' );
+                        $dow = (int) $date->format( 'N' ); // 1=Mon … 7=Sun
+                        if ( $dow < 6 ) { // Mon–Fri only
+                                $added++;
+                        }
                 }
                 return $date->format( 'Y-m-d' );
         }
